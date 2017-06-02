@@ -1,0 +1,146 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          ebotv3
+# Required-Start:    $local_fs $remote_fs $network $syslog
+# Required-Stop:     $local_fs $remote_fs $network $syslog
+# Default-Start:     
+# Default-Stop:      
+# X-Interactive:     true
+# Short-Description: start/stop eBot-CSGO
+### END INIT INFO
+
+# name of daemon (eBot) will be used to name the screen session
+DAEMON="ebotv3"
+# path to daemon (eBot) installation
+DAEMON_PATH="/home/ebot-csgo"
+# path to eBot WEB installation (used for clear-cache)
+DAEMON_WEB_PATH="/home/ebot-web"
+
+# display name of daemon
+NAME="eBot-V3"
+PIDFILE=/var/run/${DAEMON}.pid
+RETVAL=0
+
+# prints message with red text
+function err_print {
+	echo -e "\e[31m$1\e[0m"
+}
+
+# prints message with green text
+function ok_print {
+	echo -e "\e[32m$1\e[0m"
+}
+
+# gets the PID of the DAEMON running in screen (if any)
+function get_pid {
+	echo $(ps axf |grep $DAEMON |grep ' SCREEN ' |awk '{print $1}' |sed 's/\W//g')
+}
+
+case "$1" in
+	start)
+		echo -n "Starting $NAME: "
+
+		# see if we have correct path to eBot-CSGO installation
+		if [ ! -d $DAEMON_PATH ]; then
+			err_print "DAEMON_PATH variable is set to '$DAEMON_PATH', the directory does not exist therefore I am unable to start $DAEMON. Update script with correct path."
+			exit -1
+		fi
+		cd $DAEMON_PATH
+		screen -dmS $DAEMON php bootstrap.php
+		RETVAL=$?
+		PID=$(get_pid)
+		if [ -z $PID ]; then
+			err_print "Failed to start $DAEMON (RC: $RETVAL)."
+		else
+			ok_print "$DAEMON started (PID: $PID)."
+			echo $PID > $PIDFILE
+		fi
+	;;
+	stop)
+		echo -n "Stopping $NAME: "
+		PID=$(get_pid)
+		if [ ! -z $PID ]; then
+			kill $PID
+			RETVAL=$?
+			if [ $RETVAL -eq 0 ]; then
+				ok_print "stopped $DAEMON."
+			else
+				err_print "unable to stop $DAEMON return code: $RETVAL."
+			fi
+		else
+			err_print "$DAEMON already stopped."
+		fi
+
+		rm -rf $PIDFILE
+	;;
+	clear-cache)
+		echo "Clearing webcache..."
+
+		# see if we have correct path to eBot-WEB installation
+		if [ ! -d $DAEMON_WEB_PATH ]; then
+			err_print "DAEMON_WEB_PATH variable is set to '$DAEMON_WEB_PATH', the directory does not exist therefore I am unable to clear web cache. Update script with correct path."
+			exit -1
+		fi
+
+		# Clear symfony cache
+		cd $DAEMON_WEB_PATH
+		php symfony cc
+		RETVAL=$?
+
+		# sanity check of return code
+		if [ $RETVAL -eq 0 ]; then
+			ok_print "Cache cleared successfully.";
+		else
+			err_print "Got unexpected return code $RETVAL when clearing cache."
+		fi
+	;;
+	restart)
+		echo "Restarting $NAME..."
+		$0 stop
+		$0 start
+	;;
+	status)
+		echo -n "$NAME: "
+		PID=$(get_pid)
+
+		# see if pidfile exists
+		if [ -f $PIDFILE ]; then
+			# pid according to PIDFILE
+			PIDF=$(cat $PIDFILE)
+			RETVAL=$?
+
+			# PID in PIDFILE running?
+			if [ -z "$(ps axf |grep $PIDF |grep -v grep)" ]; then
+				# since PID in PIDFILE is not running, see if it is running under a different PID (ie manually started)
+				if [ -z $PID ]; then
+					err_print "Process dead, but pidfile exists."
+				else
+					err_print "Process running under PID $PID, but pidfile contains $PIDF."
+				fi
+			else
+				# sanity check of screen session PID and pidfile content, check that they are equal
+				if [ "$PID" -eq "$PIDF" ]; then
+					DAEMON_UPTIME=$(date -u -d "0 $(date +%s) sec-$(date +%s -r $PIDFILE) sec" +"%H:%M:%S")
+					ok_print "$DAEMON running (PID $PID) uptime: $DAEMON_UPTIME (hh:mm:ss)."
+				else
+					err_print "$DAEMON running under PID $PID, but pidfile contains $PIDF."
+				fi
+			fi
+		else
+			# Since pidfile does not exist, check if screen session is running under another PID (ie manually started)
+			if [ -z $PID ]; then
+				err_print "$DAEMON not running."
+			else
+				err_print "$DAEMON running under pid $PID, but pidfile does not exist."
+			fi
+
+		fi
+    ;;
+  *)
+	echo "Usage: $0 {start|stop|restart|status|clear-cache}"
+	exit 1
+    ;;
+esac
+
+exit $RETVAL
+
